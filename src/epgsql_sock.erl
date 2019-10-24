@@ -367,10 +367,16 @@ do_send(gen_tcp, Sock, Bin) ->
             ok
     catch
         error:_Error ->
+            telemetry:execute([send, failed], #{reason => einval}, #{}),
             {error, einval}
     end;
 do_send(ssl, Sock, Bin) ->
-    ssl:send(Sock, Bin).
+    case ssl:send(Sock, Bin) of
+        ok -> ok;
+        {error, _Reason} = Err ->
+            telemetry:execute([send, failed], #{reason => ssl_send_failed}, #{}),
+            Err
+    end.
 
 loop(#state{data = Data, handler = Handler, repl = Repl} = State) ->
     case epgsql_wire:decode_message(Data) of

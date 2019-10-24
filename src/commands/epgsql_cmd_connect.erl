@@ -53,6 +53,7 @@ execute(PgSock, #connect{opts = #{host := Host} = Opts, stage = connect} = State
         {ok, Sock} ->
             client_handshake(Sock, PgSock, State);
         {error, Reason} = Error ->
+            telemetry:execute([connection, failed], #{reason => econnrefused}, #{}),
             {stop, Reason, Error, PgSock}
     end;
 execute(PgSock, #connect{stage = auth, auth_send = {PacketId, Data}} = St) ->
@@ -130,6 +131,7 @@ maybe_ssl(S, Flag, Opts, PgSock) ->
                 {ok, S2}        ->
                     epgsql_sock:set_net_socket(ssl, S2, PgSock);
                 {error, Reason} ->
+                    telemetry:execute([connection, failed], #{reason => ssl_failed}, #{}),
                     Err = {ssl_negotiation_failed, Reason},
                     {error, Err}
             end;
@@ -138,6 +140,7 @@ maybe_ssl(S, Flag, Opts, PgSock) ->
                 true ->
                     epgsql_sock:set_net_socket(gen_tcp, S, PgSock);
                 required ->
+                    telemetry:execute([connection, failed], #{reason => ssl_not_available}, #{}),
                     {error, ssl_not_available}
             end
     end.
@@ -154,6 +157,7 @@ auth_init(<<?AUTH_SASL:?int32, MethodsB/binary>>, Sock, St) ->
         true ->
             auth_init(fun auth_scram/3, undefined, Sock, St);
         false ->
+            telemetry:execute([connection, failed], #{reason => auth_failed}, #{}),
             {stop, normal, {error, {unsupported_auth_method,
                                     {sasl, lists:delete(<<>>, Methods)}}}}
     end;
@@ -166,6 +170,7 @@ auth_init(<<M:?int32, _/binary>>, Sock, _St) ->
                  8 -> sspi;
                  _ -> {unknown, M}
              end,
+    telemetry:execute([connection, failed], #{reason => econnrefused}, #{}),
     {stop, normal, {error, {unsupported_auth_method, Method}}, Sock}.
 
 auth_init(Fun, InitState, PgSock, St) ->
@@ -179,6 +184,7 @@ auth_handle(Data, PgSock, #connect{auth_fun = Fun, auth_state = AuthSt} = St) ->
                                          auth_send = {SendPacketId, SendData}}};
         ok -> {noaction, PgSock, St};
         {error, Reason} ->
+            telemetry:execute([connection, failed], #{reason => auth_failed}, #{}),
             {stop, normal, {error, Reason}};
         unknown -> unknown
     end.
@@ -259,6 +265,7 @@ handle_message(?ERROR, #error{code = Code} = Err, Sock, #connect{stage = Stage} 
               _ ->
                   Err
           end,
+    telemetry:execute([connection, failed], #{reason => auth_failed}, #{}),
     {stop, normal, {error, Why}, Sock};
 handle_message(_, _, _, _) ->
     unknown.
